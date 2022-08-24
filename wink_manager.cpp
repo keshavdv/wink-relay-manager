@@ -103,7 +103,7 @@ public:
     char topic[256] = {0};
     sprintf(topic, MQTT_TEMPERATURE_TOPIC_FORMAT, m_config.mqttTopicPrefix.c_str());
     char payload[10] = {0};
-    sprintf(payload, "%f", tempC);
+    sprintf(payload, "%.2f", tempC);
     sendPayload(topic, payload, true);
   }
 
@@ -111,7 +111,7 @@ public:
     char topic[256] = {0};
     sprintf(topic, MQTT_HUMIDITY_TOPIC_FORMAT, m_config.mqttTopicPrefix.c_str());
     char payload[10] = {0};
-    sprintf(payload, "%f", humidity);
+    sprintf(payload, "%.2f", humidity);
     sendPayload(topic, payload, true);
   }
 
