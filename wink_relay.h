@@ -332,7 +332,7 @@ private:
         trigger = true;
       }
     });
-    if (trigger && !m_inputGrabbed) {
+    if (trigger) {
       screenPower(true);
     }
   }

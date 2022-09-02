@@ -1,4 +1,5 @@
 #include "wink_relay.h"
+#include <unistd.h>
 
 #include "MQTTAsync.h"
 #include "ini.h"
@@ -54,6 +55,9 @@ private:
   WinkRelay m_relay;
   Config m_config;
   MQTTAsync m_mqttClient;
+  std::mutex mtx;
+  std::condition_variable cv;
+  bool ready = false;;
   std::map<std::string, MessageFunction> m_messageCallbacks;
   std::shared_ptr<spdlog::logger> log;
 
@@ -152,27 +156,38 @@ public:
     }
     MQTTAsync_subscribeMany(m_mqttClient, topicCount, topics, qos, nullptr);
     m_relay.resetState(); // trigger fresh state events on next loop
+
+    {
+      ready = true;
+      cv.notify_all();
+    }
   }
 
   void onConnectFailure(MQTTAsync_failureData* response) {
-    log->error("Connect failed, rc {}", response ? response->code : 0);
+    log->error("Connect failed, rc {}, reconnecting", response ? response->code : 0);
+    cv.notify_all();
   }
 
   void messageArrived(char* topicName, int topicLen, MQTTAsync_message* message) {
-    log->debug("Received message on topic [{}] : {:.{}}", topicName, (const char*)message->payload, message->payloadlen); 
+    log->debug("Received message on topic [{}] : {:.{}}", topicName, (const char*)message->payload, message->payloadlen);
     auto it = m_messageCallbacks.find(topicName);
     if (it != m_messageCallbacks.end()) {
       it->second(message);
     }
   }
-  
+
   void sendPayload(const char* topic, const char* payload, bool retained = false) {
     // check if connected?
-    log->debug("Sending \"{}\" on [{}]", payload, topic);
+    if (!MQTTAsync_isConnected(m_mqttClient)) return;
+    log->info("Sending \"{}\" on [{}]", payload, topic);
     int rc;
     if ((rc = MQTTAsync_send(m_mqttClient, topic, strlen(payload), (void*)payload, 0, retained, NULL)) != MQTTASYNC_SUCCESS)
     {
       log->error("Failed to send payload, return code {}", rc);
+      if (rc == -3) {
+        rc = MQTTAsync_reconnect(m_mqttClient);
+        log->error("Attempting reconnect, return code {}", rc);
+      }
     }
   }
 
@@ -314,12 +329,20 @@ public:
       conn_opts.password = m_config.mqttPassword.c_str();
     }
 
-    int rc;
-    if ((rc = MQTTAsync_connect(m_mqttClient, &conn_opts)) != MQTTASYNC_SUCCESS)
-    {
-      log->error("Can't connect to {} - rcode {}", m_config.mqttAddress.c_str(), rc);
-      exit(EXIT_FAILURE);
+    while (!ready) {
+
+      int rc;
+      log->info("Connecting to mqtt host {}", m_config.mqttAddress.c_str());
+      if ((rc = MQTTAsync_connect(m_mqttClient, &conn_opts)) != MQTTASYNC_SUCCESS)
+      {
+        log->error("Can't connect to {} - rcode {}", m_config.mqttAddress.c_str(), rc);
+        exit(EXIT_FAILURE);
+      }
+      std::unique_lock<std::mutex> lck(mtx);
+      cv.wait(lck);
+      if (!ready) sleep(10);
     }
+
 
     if (m_config.hideStatusBar) {
       using namespace std::chrono_literals;
